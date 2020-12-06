@@ -1,0 +1,11 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+AlignConsecutiveAssignments: false
+AlignTrailingComments: false
+ColumnLimit: 0
+AllowShortFunctionsOnASingleLine: Empty
+PointerAlignment: Middle
+SpaceAfterLogicalNot: true
+SpaceAfterCStyleCast: true
+Cpp11BracedListStyle: false
+SpaceBeforeCpp11BracedList: true
