@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <deque>
+#include <optional>
+#include <queue>
 #include <vector>
 extern "C" {
 #include <unistd.h>
@@ -25,6 +28,16 @@ enum {
 vector<uchar> model;
 vector<int> trail; // 0 for decision mark
 uint decision_level;
+struct clause {
+    uint num_lit;
+    int lits[];
+};
+vector<uint> level;
+vector<clause *> reason; // nullptr for decision
+vector<bool> seen; // only used in `analyze`
+queue<int> q; // literal pool for conflict analysis; only used in `analyze`
+vector<int> learnt; // only used in `analyze`
+deque<clause *> db; // all clauses
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -36,36 +49,100 @@ int ev(uint var) {
     return ! defined(var) ? 0 : phase(var) ? (int) var : -(int) var;
 }
 
-void push(int lit) {
+void push(int lit, clause * c) {
     uint var = abs(lit);
     model[var] = lit > 0 ? MODEL_DEFINED | MODEL_PHASE : MODEL_DEFINED;
+    level[var] = decision_level;
+    reason[var] = c;
     trail.push_back(lit);
 }
-int pop() {
+void pop() {
     int lit = trail.back();
     uint var = abs(lit);
     model[var] &= ~MODEL_DEFINED;
+    seen[var] = false;
     trail.pop_back();
-    return lit;
 }
 
-void backtrack() {
-    int lit = 0;
-    for (uint i = trail.size() - 1; trail[i] != 0; --i)
-        lit = pop();
-    trail.pop_back(); // remove the mark
-    --decision_level;
-    push(-lit); // flip the decision
+clause * make_clause(const vector<int> & lits) {
+    clause * c = reinterpret_cast<clause *>(malloc(sizeof(clause) + sizeof(int) * lits.size()));
+    c->num_lit = lits.size();
+    for (uint i = 0; i < lits.size(); ++i)
+        c->lits[i] = lits[i];
+    return c;
 }
 
-bool find_conflict() {
+void backjump(uint level) {
+    while (decision_level != level) {
+        for (uint i = trail.size() - 1; trail[i] != 0; --i)
+            pop();
+        trail.pop_back(); // remove the mark
+        --decision_level;
+    }
+}
+
+void analyze(clause * conflict) {
+    for (uint i = 0; i < conflict->num_lit; ++i) {
+        int lit = conflict->lits[i];
+        if (level[abs(lit)] == decision_level) {
+            q.push(lit);
+        } else {
+            learnt.push_back(lit);
+        }
+        seen[abs(lit)] = true;
+    }
+    int uip = 0;
+    while (! q.empty()) {
+        auto lit = q.front();
+        q.pop();
+        if (uip == 0 && q.empty()) {
+            uip = lit;
+            learnt.push_back(lit);
+            break;
+        }
+        auto c = reason[abs(lit)];
+        if (! c) {
+            uip = lit;
+            learnt.push_back(lit);
+            seen[abs(lit)] = true;
+            continue;
+        }
+        for (uint i = 0; i < c->num_lit; ++i) {
+            int lit = c->lits[i];
+            uint v = abs(lit);
+            if (seen[v])
+                continue;
+            seen[v] = true;
+            if (level[v] == decision_level) {
+                q.push(lit);
+            } else {
+                learnt.push_back(lit);
+            }
+        }
+    }
+    for (auto lit : learnt)
+        seen[abs(lit)] = false;
+    uint max_lv = 0;
+    for (auto lit : learnt) {
+        if (level[abs(lit)] != decision_level)
+            max_lv = max(level[abs(lit)], max_lv);
+    }
+    auto c = make_clause(learnt);
+    db.push_back(c);
+    backjump(max_lv);
+    push(uip, c); // short-cut the next unit propagation
+    learnt.clear();
+}
+
+optional<clause *> find_conflict() {
     bool retry;
     do {
         retry = false;
-        for (auto & c : F) {
+        for (auto c : db) {
             int num_undef = 0;
             int undef_lit;
-            for (auto lit : c) {
+            for (uint i = 0; i < c->num_lit; ++i) {
+                int lit = c->lits[i];
                 if (! defined(abs(lit))) {
                     ++num_undef;
                     undef_lit = lit;
@@ -74,15 +151,15 @@ bool find_conflict() {
                 }
             }
             if (num_undef == 0)
-                return true; // conflict found
+                return c; // conflict found
             if (num_undef == 1) {
-                push(undef_lit);
+                push(undef_lit, c);
                 retry = true;
             }
         next:;
         }
     } while (retry);
-    return false; // no conflict found
+    return nullopt; // no conflict found
 }
 
 int choose() {
@@ -99,7 +176,7 @@ int decide() {
         return false; // sat
     trail.push_back(0); // push mark
     ++decision_level;
-    push(lit);
+    push(lit, nullptr);
     return true;
 }
 
@@ -107,12 +184,21 @@ bool solve() {
     model.resize(N + 1);
     trail.reserve(2 * N);
     decision_level = 0;
+    level.resize(N + 1);
+    reason.resize(N + 1);
+    seen.resize(N + 1);
+    learnt.reserve(N);
+
+    for (auto & lits : F) {
+        auto c = make_clause(lits);
+        db.push_back(c);
+    }
 
     while (1) {
-        while (find_conflict()) {
+        while (auto conflict = find_conflict()) {
             if (decision_level == 0)
                 return false;
-            backtrack();
+            analyze(*conflict);
         }
         if (! decide())
             return true;
