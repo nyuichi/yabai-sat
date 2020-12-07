@@ -35,7 +35,6 @@ struct clause {
 vector<uint> level;
 vector<clause *> reason; // nullptr for decision
 vector<bool> seen; // only used in `analyze`
-queue<int> q; // literal pool for conflict analysis; only used in `analyze`
 vector<int> learnt; // only used in `analyze`
 deque<clause *> db; // all clauses
 
@@ -60,7 +59,6 @@ void pop() {
     int lit = trail.back();
     uint var = abs(lit);
     model[var] &= ~MODEL_DEFINED;
-    seen[var] = false;
     trail.pop_back();
 }
 
@@ -82,55 +80,43 @@ void backjump(uint level) {
 }
 
 void analyze(clause * conflict) {
-    for (uint i = 0; i < conflict->num_lit; ++i) {
-        int lit = conflict->lits[i];
-        if (level[abs(lit)] == decision_level) {
-            q.push(lit);
-        } else {
-            learnt.push_back(lit);
-        }
-        seen[abs(lit)] = true;
-    }
-    int uip = 0;
-    while (! q.empty()) {
-        auto lit = q.front();
-        q.pop();
-        if (uip == 0 && q.empty()) {
-            uip = lit;
-            learnt.push_back(lit);
-            break;
-        }
-        auto c = reason[abs(lit)];
-        if (! c) {
-            uip = lit;
-            learnt.push_back(lit);
-            seen[abs(lit)] = true;
-            continue;
-        }
-        for (uint i = 0; i < c->num_lit; ++i) {
-            int lit = c->lits[i];
+    learnt.push_back(0); // reserve learnt[0] for UIP
+    uint num_imp = 0;
+    int lit = 0;
+    uint i = trail.size() - 1;
+    do {
+        for (uint i = 0; i < conflict->num_lit; ++i) {
+            int lit = conflict->lits[i];
             uint v = abs(lit);
             if (seen[v])
                 continue;
             seen[v] = true;
             if (level[v] == decision_level) {
-                q.push(lit);
+                ++num_imp;
             } else {
                 learnt.push_back(lit);
             }
         }
-    }
+        if (lit != 0)
+            seen[abs(lit)] = false;
+        do {
+            lit = trail[i];
+            --i;
+        } while (! seen[abs(lit)]);
+        --num_imp;
+        conflict = reason[abs(lit)];
+    } while (num_imp > 0);
+    learnt[0] = -lit;
     for (auto lit : learnt)
         seen[abs(lit)] = false;
     uint max_lv = 0;
-    for (auto lit : learnt) {
-        if (level[abs(lit)] != decision_level)
-            max_lv = max(level[abs(lit)], max_lv);
+    for (uint i = 1; i < learnt.size(); ++i) {
+        max_lv = max(level[abs(learnt[i])], max_lv);
     }
     auto c = make_clause(learnt);
     db.push_back(c);
     backjump(max_lv);
-    push(uip, c); // short-cut the next unit propagation
+    push(-lit, c); // short-cut the next unit propagation
     learnt.clear();
 }
 
