@@ -17,6 +17,7 @@ typedef unsigned uint;
 typedef unsigned char uchar;
 
 #define SBR_BOUND 12
+#define ACTIVITY_DECAY_PERIOD 1024
 
 uint N; // number of variables
 uint M; // number of initial clauses
@@ -49,6 +50,8 @@ uint db_num_persistent = 0;
 uint db_limit = 0; // including persistent clauses
 uint backoff_timer = 0;
 uint backoff_limit = 0;
+vector<double> activity; // variable activity
+uint num_conflict = 0; // the number of conflicts ever made
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -110,6 +113,17 @@ void unwatch_clause(clause * c) {
     }
 }
 
+void bump_activity(uint v) {
+    activity[v] += 1.0;
+}
+void decay_activity() {
+    ++num_conflict;
+    if ((num_conflict % ACTIVITY_DECAY_PERIOD) == 0) {
+        for (uint v = 1; v <= N; ++v)
+            activity[v] *= 0.5;
+    }
+}
+
 void backjump(uint level) {
     while (decision_level != level) {
         for (uint i = trail.size() - 1; trail[i] != 0; --i)
@@ -131,6 +145,7 @@ void analyze(clause * conflict) {
         } else {
             ++count;
         }
+        bump_activity(v);
     }
     int uip;
     for (uint i = trail.size() - 1; true; --i) {
@@ -156,6 +171,7 @@ void analyze(clause * conflict) {
             } else {
                 ++count;
             }
+            bump_activity(v);
         }
     }
     learnt[0] = -uip;
@@ -227,11 +243,18 @@ optional<clause *> find_conflict() {
 }
 
 int choose() {
+    double max_score = 0;
+    int max_lit = 0;
     for (uint v = 1; v <= N; ++v) {
-        if (! defined(v))
-            return (int) v;
+        if (! defined(v)) {
+            double s = activity[v];
+            if (s >= max_score) {
+                max_score = s;
+                max_lit = (int) v;
+            }
+        }
     }
-    return 0;
+    return max_lit;
 }
 
 int decide() {
@@ -276,6 +299,7 @@ bool solve() {
     learnt.reserve(N);
     db_limit = F.size() * 1.5;
     backoff_limit = 100;
+    activity.resize(N + 1);
 
     vector<int> unit;
     vector<int> new_lits;
@@ -332,6 +356,7 @@ bool solve() {
                 backoff_limit *= 1.5;
                 db_limit = db_num_persistent + (db_limit - db_num_persistent) * 1.1;
             }
+            decay_activity();
         }
         if (! decide())
             return true;
