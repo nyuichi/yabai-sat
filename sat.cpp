@@ -302,6 +302,12 @@ void analyze(clause * conflict) {
     uint num_lit = learnt.size();
     for (uint i = 1; i < num_lit; ++i)
         seen[abs(learnt[i])] = false;
+    if (opt_cert_file) {
+        for (auto lit : learnt) {
+            fprintf(opt_cert_file, "%d ", lit);
+        }
+        fputs("0\n", opt_cert_file);
+    }
     uint max_lv = 0;
     for (uint i = 1; i < num_lit; ++i) {
         uint lv = level[abs(learnt[i])];
@@ -397,6 +403,13 @@ void reduce() {
             continue;
         }
         unwatch_clause(db[i]);
+        if (opt_cert_file) {
+            fputs("d ", opt_cert_file);
+            for (uint i = 0; i < db[i]->num_lit; ++i) {
+                fprintf(opt_cert_file, "%d ", db[i]->lits[i]);
+            }
+            fputs("0\n", opt_cert_file);
+        }
         free(db[i]);
     }
     db.resize(new_size);
