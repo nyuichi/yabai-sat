@@ -303,7 +303,7 @@ int choose() {
         uint v = heap_top();
         heap_pop();
         if (! defined(v)) {
-            return (int) v;
+            return phase(v) ? (int) v : -(int) v;
         }
     }
     return 0;
