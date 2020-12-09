@@ -59,6 +59,7 @@ double activity_increment = 1;
 uint restart_timer = 0;
 uint restart_limit = RESTART_BASE_INTERVAL;
 array<int, 2> luby_seq { 1, 1 }; // reluctant doubling
+vector<uint> decision; // for parital restarts
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -319,6 +320,7 @@ int decide() {
         return false; // sat
     trail.push_back(0); // push mark
     ++decision_level;
+    decision[decision_level] = abs(lit);
     push(lit, nullptr);
     return true;
 }
@@ -350,8 +352,24 @@ bool restart() {
     };
     restart_timer = 0;
     restart_limit = RESTART_BASE_INTERVAL * luby_seq[1];
-    backtrack(0);
-    return true;
+    uint next_var;
+    while (1) {
+        if (heap_empty())
+            return false;
+        next_var = heap_top();
+        if (! defined(next_var))
+            break;
+        heap_pop();
+    }
+    auto next_activity = activity[next_var];
+    for (uint level = 0; level < decision_level; ++level) {
+        uint var = decision[level + 1];
+        if (activity[var] < next_activity) {
+            backjump(level);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool solve() {
@@ -373,6 +391,7 @@ bool solve() {
     heap_index.resize(N + 1);
     for (uint v = 1; v <= N; ++v)
         heap_push(v);
+    decision.resize(N + 1);
 
     vector<int> unit;
     vector<int> new_lits;
