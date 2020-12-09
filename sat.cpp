@@ -17,7 +17,8 @@ typedef unsigned uint;
 typedef unsigned char uchar;
 
 #define SBR_BOUND 12
-#define ACTIVITY_DECAY_PERIOD 1024
+#define ACTIVITY_DECAY_FACTOR (0.9)
+#define ACTIVITY_RESCALE_LIMIT (1e100)
 
 uint N; // number of variables
 uint M; // number of initial clauses
@@ -51,9 +52,9 @@ uint db_limit = 0; // including persistent clauses
 uint backoff_timer = 0;
 uint backoff_limit = 0;
 vector<double> activity; // variable activity
-uint num_conflict = 0; // the number of conflicts ever made
 vector<uint> heap; // priority queue for variable selection
 vector<uint> heap_index; // variable to index in heap; 0 if variable not in heap
+double activity_increment = 1;
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -166,16 +167,17 @@ void unwatch_clause(clause * c) {
 }
 
 void bump_activity(uint v) {
-    activity[v] += 1.0;
+    activity[v] += activity_increment;
+    if (activity[v] > ACTIVITY_RESCALE_LIMIT) { // rescore
+        activity_increment *= (1 / ACTIVITY_RESCALE_LIMIT);
+        for (uint v = 1; v <= N; ++v)
+            activity[v] *= (1 / ACTIVITY_RESCALE_LIMIT);
+    }
     if (heap_index[v] != 0)
         heap_up(heap_index[v]);
 }
 void decay_activity() {
-    ++num_conflict;
-    if ((num_conflict % ACTIVITY_DECAY_PERIOD) == 0) {
-        for (uint v = 1; v <= N; ++v)
-            activity[v] *= 0.5;
-    }
+    activity_increment *= (1 / ACTIVITY_DECAY_FACTOR);
 }
 
 void backjump(uint level) {
