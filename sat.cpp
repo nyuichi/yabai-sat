@@ -19,6 +19,7 @@ typedef unsigned char uchar;
 #define SBR_BOUND 12
 #define ACTIVITY_DECAY_FACTOR (0.9)
 #define ACTIVITY_RESCALE_LIMIT (1e100)
+#define RESTART_BASE_INTERVAL 10 // can even be 1
 
 uint N; // number of variables
 uint M; // number of initial clauses
@@ -55,6 +56,9 @@ vector<double> activity; // variable activity
 vector<uint> heap; // priority queue for variable selection
 vector<uint> heap_index; // variable to index in heap; 0 if variable not in heap
 double activity_increment = 1;
+uint restart_timer = 0;
+uint restart_limit = RESTART_BASE_INTERVAL;
+array<int, 2> luby_seq { 1, 1 }; // reluctant doubling
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -337,6 +341,19 @@ void reduce() {
     db.resize(new_size);
 }
 
+bool restart() {
+    if (restart_timer < restart_limit)
+        return false;
+    luby_seq = {
+        (luby_seq[0] & -luby_seq[0]) == luby_seq[1] ? luby_seq[0] + 1 : luby_seq[0],
+        (luby_seq[0] & -luby_seq[0]) == luby_seq[1] ? 1 : 2 * luby_seq[1]
+    };
+    restart_timer = 0;
+    restart_limit = RESTART_BASE_INTERVAL * luby_seq[1];
+    backtrack(0);
+    return true;
+}
+
 bool solve() {
     srand(0);
 
@@ -413,7 +430,10 @@ bool solve() {
                 db_limit = db_num_persistent + (db_limit - db_num_persistent) * 1.1;
             }
             decay_activity();
+            ++restart_timer;
         }
+        if (restart())
+            continue;
         if (! decide())
             return true;
         reduce();
