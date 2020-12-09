@@ -52,6 +52,8 @@ uint backoff_timer = 0;
 uint backoff_limit = 0;
 vector<double> activity; // variable activity
 uint num_conflict = 0; // the number of conflicts ever made
+vector<uint> heap; // priority queue for variable selection
+vector<uint> heap_index; // variable to index in heap; 0 if variable not in heap
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -63,6 +65,53 @@ int ev(uint var) {
     return ! defined(var) ? 0 : phase(var) ? (int) var : -(int) var;
 }
 
+bool heap_compare(uint i, uint j) {
+    return activity[heap[i]] < activity[heap[j]];
+}
+void heap_swap(uint i, uint j) {
+    heap_index[heap[i]] = j;
+    heap_index[heap[j]] = i;
+    swap(heap[i], heap[j]);
+}
+uint heap_up(uint i) {
+    while (i != 1 && heap_compare(i / 2, i)) {
+        heap_swap(i / 2, i);
+        i = i / 2;
+    }
+    return i;
+}
+uint heap_down(uint i) {
+    while (2 * i < heap.size()) {
+        uint k = 2 * i;
+        if (k + 1 < heap.size() && heap_compare(k, k + 1)) {
+            k = k + 1; // take greater child
+        }
+        if (! heap_compare(i, k))
+            break;
+        heap_swap(i, k);
+        i = k;
+    }
+    return i;
+}
+bool heap_empty() {
+    return heap.size() == 0;
+}
+uint heap_top() {
+    return heap[1];
+}
+void heap_push(uint v) {
+    heap.push_back(v);
+    heap_index[v] = heap.size() - 1;
+    heap_up(heap.size() - 1);
+}
+void heap_pop() {
+    heap_swap(1, heap.size() - 1);
+    uint v = heap.back();
+    heap.pop_back();
+    heap_index[v] = 0;
+    heap_down(1);
+}
+
 void push(int lit, clause * c) {
     uint var = abs(lit);
     model[var] = lit > 0 ? MODEL_DEFINED | MODEL_PHASE : MODEL_DEFINED;
@@ -71,6 +120,7 @@ void push(int lit, clause * c) {
     if (c)
         c->flags |= CLAUSE_LOCK;
     trail.push_back(lit);
+    // var is lazily removed from heap
 }
 void pop() {
     int lit = trail.back();
@@ -79,6 +129,8 @@ void pop() {
     auto c = reason[var];
     if (c)
         c->flags &= ~CLAUSE_LOCK;
+    if (heap_index[var] == 0)
+        heap_push(var);
     trail.pop_back();
 }
 
@@ -115,6 +167,8 @@ void unwatch_clause(clause * c) {
 
 void bump_activity(uint v) {
     activity[v] += 1.0;
+    if (heap_index[v] != 0)
+        heap_up(heap_index[v]);
 }
 void decay_activity() {
     ++num_conflict;
@@ -243,18 +297,14 @@ optional<clause *> find_conflict() {
 }
 
 int choose() {
-    double max_score = 0;
-    int max_lit = 0;
-    for (uint v = 1; v <= N; ++v) {
+    while (! heap_empty()) {
+        uint v = heap_top();
+        heap_pop();
         if (! defined(v)) {
-            double s = activity[v];
-            if (s >= max_score) {
-                max_score = s;
-                max_lit = (int) v;
-            }
+            return (int) v;
         }
     }
-    return max_lit;
+    return 0;
 }
 
 int decide() {
@@ -300,6 +350,10 @@ bool solve() {
     db_limit = F.size() * 1.5;
     backoff_limit = 100;
     activity.resize(N + 1);
+    heap.reserve(N + 1); // heap[0] is not used
+    heap_index.resize(N + 1);
+    for (uint v = 1; v <= N; ++v)
+        heap_push(v);
 
     vector<int> unit;
     vector<int> new_lits;
