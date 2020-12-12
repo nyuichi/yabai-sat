@@ -200,8 +200,11 @@ void analyze(clause * conflict) {
     for (uint i = 0; i < conflict->num_lit; ++i) {
         int lit = conflict->lits[i];
         uint v = abs(lit);
+        uint lv = level[v];
+        if (lv == 0)
+            continue;
         seen[v] = true;
-        if (level[v] < decision_level) {
+        if (lv < decision_level) {
             learnt.push_back(lit);
         } else {
             ++count;
@@ -226,8 +229,11 @@ void analyze(clause * conflict) {
             uint v = abs(lit);
             if (seen[v])
                 continue;
+            uint lv = level[v];
+            if (lv == 0)
+                continue;
             seen[v] = true;
-            if (level[v] < decision_level) {
+            if (lv < decision_level) {
                 learnt.push_back(lit);
             } else {
                 ++count;
@@ -236,6 +242,27 @@ void analyze(clause * conflict) {
         }
     }
     learnt[0] = -uip;
+    // minimize clause
+    for (uint i = 1; i < learnt.size(); ++i) {
+        auto c = reason[abs(learnt[i])];
+        if (c) {
+            bool subsume = true;
+            for (uint i = 1; i < c->num_lit; ++i) {
+                int lit = c->lits[i];
+                uint v = abs(lit);
+                if (! (seen[v] || level[v] == 0)) {
+                    subsume = false;
+                    break;
+                }
+            }
+            if (subsume) {
+                seen[abs(learnt[i])] = false;
+                learnt[i] = learnt.back();
+                learnt.pop_back();
+                --i;
+            }
+        }
+    }
     uint num_lit = learnt.size();
     for (uint i = 1; i < num_lit; ++i)
         seen[abs(learnt[i])] = false;
