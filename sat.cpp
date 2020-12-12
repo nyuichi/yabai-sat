@@ -25,6 +25,11 @@ enum {
 vector<uchar> model;
 vector<int> trail; // 0 for decision mark
 uint decision_level;
+struct clause {
+    uint num_lit;
+    int lits[]; // lits[0] and lits[1] are watched literals
+};
+vector<vector<clause *>> pos_list, neg_list; // watch lists
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -49,6 +54,35 @@ int pop() {
     return lit;
 }
 
+clause * make_clause(const vector<int> & lits) {
+    clause * c = reinterpret_cast<clause *>(malloc(sizeof(clause) + sizeof(int) * lits.size()));
+    c->num_lit = lits.size();
+    for (uint i = 0; i < lits.size(); ++i)
+        c->lits[i] = lits[i];
+    return c;
+}
+
+auto & watch_list(int lit) {
+    return lit > 0 ? pos_list[lit] : neg_list[-lit];
+}
+void watch_clause(clause * c) {
+    for (auto i : { 0, 1 }) {
+        watch_list(c->lits[i]).push_back(c);
+    }
+}
+void unwatch_clause(clause * c) {
+    for (auto i : { 0, 1 }) {
+        auto & wlist = watch_list(c->lits[i]);
+        for (auto & wc : wlist) {
+            if (wc == c) {
+                wc = wlist.back();
+                wlist.pop_back();
+                break;
+            }
+        }
+    }
+}
+
 void backtrack() {
     int lit = 0;
     for (uint i = trail.size() - 1; trail[i] != 0; --i)
@@ -59,29 +93,33 @@ void backtrack() {
 }
 
 bool find_conflict() {
-    bool retry;
-    do {
-        retry = false;
-        for (auto & c : F) {
-            int num_undef = 0;
-            int undef_lit;
-            for (auto lit : c) {
-                if (! defined(abs(lit))) {
-                    ++num_undef;
-                    undef_lit = lit;
-                } else if (ev(abs(lit)) == lit) {
+    for (uint prop = trail.size() - 1; prop < trail.size(); ++prop) {
+        int lit = trail[prop];
+        auto & wlist = watch_list(-lit);
+        for (uint i = 0; i < wlist.size(); ++i) {
+            auto c = wlist[i];
+            if (c->lits[0] == -lit)
+                swap(c->lits[0], c->lits[1]);
+            int lit = c->lits[0];
+            if (ev(abs(lit)) == lit) // satisfied
+                continue;
+            for (uint k = 2; k < c->num_lit; ++k) {
+                int lit = c->lits[k];
+                if (ev(abs(lit)) != -lit) { // update watch list
+                    watch_list(lit).push_back(c);
+                    swap(c->lits[1], c->lits[k]);
+                    wlist[i] = wlist.back();
+                    wlist.pop_back();
+                    --i;
                     goto next;
                 }
             }
-            if (num_undef == 0)
+            if (defined(abs(lit)))
                 return true; // conflict found
-            if (num_undef == 1) {
-                push(undef_lit);
-                retry = true;
-            }
+            push(lit);
         next:;
         }
-    } while (retry);
+    }
     return false; // no conflict found
 }
 
@@ -107,6 +145,48 @@ bool solve() {
     model.resize(N + 1);
     trail.reserve(2 * N);
     decision_level = 0;
+    pos_list.resize(N + 1);
+    neg_list.resize(N + 1);
+
+    vector<int> unit;
+    vector<int> new_lits;
+    for (auto & lits : F) {
+        size_t size = lits.size();
+        if (size == 0)
+            return false; // unsat
+        if (size == 1) {
+            unit.push_back(lits[0]);
+            continue;
+        }
+        for (uint i = 0; i < lits.size(); ++i) {
+            bool last = true;
+            for (uint j = i + 1; j < lits.size(); ++j) {
+                if (lits[i] == -lits[j]) // tautology found
+                    goto next;
+                if (lits[i] == lits[j]) {
+                    last = false;
+                    break;
+                }
+            }
+            if (last)
+                new_lits.push_back(lits[i]);
+        }
+        watch_clause(make_clause(new_lits));
+    next:
+        new_lits.clear();
+    }
+
+    while (! unit.empty()) {
+        int lit = unit.back();
+        unit.pop_back();
+        push(lit);
+        if (find_conflict())
+            return false;
+    }
+    if (trail.empty()) {
+        if (! decide())
+            return true;
+    }
 
     while (1) {
         while (find_conflict()) {
