@@ -60,6 +60,8 @@ uint restart_timer = 0;
 uint restart_limit = RESTART_BASE_INTERVAL;
 array<int, 2> luby_seq { 1, 1 }; // reluctant doubling
 vector<uint> decision; // for parital restarts
+vector<pair<uint, bool>> stack; // only used in `analyze`
+vector<uint> trash; // only used in `analyze`
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -244,25 +246,43 @@ void analyze(clause * conflict) {
     learnt[0] = -uip;
     // minimize clause
     for (uint i = 1; i < learnt.size(); ++i) {
-        auto c = reason[abs(learnt[i])];
-        if (c) {
-            bool subsume = true;
-            for (uint i = 1; i < c->num_lit; ++i) {
-                int lit = c->lits[i];
-                uint v = abs(lit);
-                if (! (seen[v] || level[v] == 0)) {
-                    subsume = false;
-                    break;
+        bool subsume = true;
+        uint v = abs(learnt[i]);
+        stack.push_back({ v, true });
+        while (! stack.empty()) {
+            auto [v, cont] = stack.back();
+            stack.pop_back();
+            if (! cont) {
+                if (! seen[v]) {
+                    seen[v] = true; // v is removable
+                    trash.push_back(v);
                 }
+                continue;
             }
-            if (subsume) {
-                seen[abs(learnt[i])] = false;
-                learnt[i] = learnt.back();
-                learnt.pop_back();
-                --i;
+            auto c = reason[v];
+            if (! c) {
+                subsume = false;
+                break;
+            }
+            stack.push_back({ v, false });
+            for (uint i = 1; i < c->num_lit; ++i) {
+                uint v = abs(c->lits[i]);
+                if (! (seen[v] || level[v] == 0))
+                    stack.push_back({ v, true });
             }
         }
+        if (subsume) {
+            seen[v] = false;
+            learnt[i] = learnt.back();
+            learnt.pop_back();
+            --i;
+        }
+        stack.clear();
     }
+    for (uint v : trash) {
+        seen[v] = false;
+    }
+    trash.clear();
     uint num_lit = learnt.size();
     for (uint i = 1; i < num_lit; ++i)
         seen[abs(learnt[i])] = false;
@@ -419,6 +439,7 @@ bool solve() {
     for (uint v = 1; v <= N; ++v)
         heap_push(v);
     decision.resize(N + 1);
+    trash.reserve(N);
 
     vector<int> unit;
     vector<int> new_lits;
