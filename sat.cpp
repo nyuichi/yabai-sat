@@ -17,6 +17,8 @@ FILE * opt_cert_file = NULL;
 typedef unsigned uint;
 typedef unsigned char uchar;
 
+#define SBR_BOUND 12
+
 uint N; // number of variables
 uint M; // number of initial clauses
 vector<vector<int>> F; // problem
@@ -28,15 +30,24 @@ enum {
 vector<uchar> model;
 vector<int> trail; // 0 for decision mark
 uint decision_level;
+enum {
+    CLAUSE_LOCK = 1,
+};
 struct clause {
     uint num_lit;
+    double score;
+    int flags;
     int lits[];
 };
 vector<uint> level;
 vector<clause *> reason; // nullptr for decision
 vector<bool> seen; // only used in `analyze`
 vector<int> learnt; // only used in `analyze`
-deque<clause *> db; // all clauses
+deque<clause *> db; // all clauses; first `db_num_persistent` clauses are persistent
+uint db_num_persistent = 0;
+uint db_limit = 0; // including persistent clauses
+uint backoff_timer = 0;
+uint backoff_limit = 0;
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -53,20 +64,27 @@ void push(int lit, clause * c) {
     model[var] = lit > 0 ? MODEL_DEFINED | MODEL_PHASE : MODEL_DEFINED;
     level[var] = decision_level;
     reason[var] = c;
+    if (c)
+        c->flags |= CLAUSE_LOCK;
     trail.push_back(lit);
 }
 void pop() {
     int lit = trail.back();
     uint var = abs(lit);
+    clause * c = reason[var];
+    if (c)
+        c->flags &= ~CLAUSE_LOCK;
     model[var] &= ~MODEL_DEFINED;
     trail.pop_back();
 }
 
-clause * make_clause(const vector<int> & lits) {
+clause * make_clause(const vector<int> & lits, double score, int flags) {
     clause * c = reinterpret_cast<clause *>(malloc(sizeof(clause) + sizeof(int) * lits.size()));
     c->num_lit = lits.size();
     for (uint i = 0; i < lits.size(); ++i)
         c->lits[i] = lits[i];
+    c->score = score;
+    c->flags = flags;
     return c;
 }
 
@@ -113,8 +131,21 @@ void analyze(clause * conflict) {
     for (uint i = 1; i < learnt.size(); ++i) {
         max_lv = max(level[abs(learnt[i])], max_lv);
     }
-    auto c = make_clause(learnt);
-    db.push_back(c);
+    uint num_lit = learnt.size();
+    // learn new clause
+    double score;
+    if (num_lit < SBR_BOUND) {
+        score = num_lit;
+    } else {
+        score = SBR_BOUND + rand() * (1 / ((double) RAND_MAX + 1));
+    }
+    auto c = make_clause(learnt, score, 0);
+    if (num_lit == 2) {
+        db.push_front(c);
+        ++db_num_persistent;
+    } else {
+        db.push_back(c);
+    }
     backjump(max_lv);
     push(-lit, c); // short-cut the next unit propagation
     learnt.clear();
@@ -166,7 +197,26 @@ int decide() {
     return true;
 }
 
+void reduce() {
+    if (db.size() < db_limit)
+        return;
+    sort(db.begin() + db_num_persistent, db.end(), [](auto x, auto y) {
+        return x->score < y->score;
+    });
+    uint new_size = db_num_persistent + (db.size() - db_num_persistent) / 2;
+    for (uint i = new_size; i < db.size(); ++i) {
+        if ((db[i]->flags & CLAUSE_LOCK) != 0) {
+            db[new_size++] = db[i];
+            continue;
+        }
+        free(db[i]);
+    }
+    db.resize(new_size);
+}
+
 bool solve() {
+    srand(0);
+
     model.resize(N + 1);
     trail.reserve(2 * N);
     decision_level = 0;
@@ -174,10 +224,13 @@ bool solve() {
     reason.resize(N + 1);
     seen.resize(N + 1);
     learnt.reserve(N);
+    db_limit = F.size() * 1.5;
+    backoff_limit = 100;
 
     for (auto & lits : F) {
-        auto c = make_clause(lits);
+        auto c = make_clause(lits, -1, 0);
         db.push_back(c);
+        ++db_num_persistent;
     }
 
     while (1) {
@@ -185,9 +238,16 @@ bool solve() {
             if (decision_level == 0)
                 return false;
             analyze(*conflict);
+            ++backoff_timer;
+            if (backoff_timer >= backoff_limit) {
+                backoff_timer = 0;
+                backoff_limit *= 1.5;
+                db_limit = db_num_persistent + (db_limit - db_num_persistent) * 1.1;
+            }
         }
         if (! decide())
             return true;
+        reduce();
     }
 }
 
