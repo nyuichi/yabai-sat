@@ -59,19 +59,29 @@ void backtrack() {
 }
 
 bool find_conflict() {
-    for (auto & c : F) {
-        int num_undef = 0;
-        for (auto lit : c) {
-            if (! defined(abs(lit))) {
-                ++num_undef;
-            } else if (ev(abs(lit)) == lit) {
-                goto next;
+    bool retry;
+    do {
+        retry = false;
+        for (auto & c : F) {
+            int num_undef = 0;
+            int undef_lit;
+            for (auto lit : c) {
+                if (! defined(abs(lit))) {
+                    ++num_undef;
+                    undef_lit = lit;
+                } else if (ev(abs(lit)) == lit) {
+                    goto next;
+                }
             }
+            if (num_undef == 0)
+                return true; // conflict found
+            if (num_undef == 1) {
+                push(undef_lit);
+                retry = true;
+            }
+        next:;
         }
-        if (num_undef == 0)
-            return true; // conflict found
-    next:;
-    }
+    } while (retry);
     return false; // no conflict found
 }
 
