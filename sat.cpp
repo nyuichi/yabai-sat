@@ -16,7 +16,6 @@ FILE * opt_cert_file = NULL;
 typedef unsigned uint;
 typedef unsigned char uchar;
 
-#define SBR_BOUND 12
 #define ACTIVITY_DECAY_FACTOR (0.9)
 #define ACTIVITY_RESCALE_LIMIT (1e100)
 #define RESTART_BASE_INTERVAL 10 // can even be 1
@@ -39,7 +38,7 @@ enum {
 struct clause {
     uint num_lit;
     int flags;
-    double score;
+    uint score;
     int lits[]; // lits[0] and lits[1] are watched literals
 };
 vector<vector<clause *>> pos_list, neg_list; // watch lists
@@ -142,7 +141,7 @@ void pop() {
     trail.pop_back();
 }
 
-clause * make_clause(const vector<int> & lits, int flags, double score) {
+clause * make_clause(const vector<int> & lits, int flags, uint score) {
     clause * c = reinterpret_cast<clause *>(malloc(sizeof(clause) + sizeof(int) * lits.size()));
     c->num_lit = lits.size();
     for (uint i = 0; i < lits.size(); ++i)
@@ -194,6 +193,23 @@ void backjump(uint level) {
         trail.pop_back(); // remove the mark
         --decision_level;
     }
+}
+
+void update_score(clause * c) {
+    uint lbd = 0;
+    for (uint i = 0; i < c->num_lit; ++i) {
+        int lit = c->lits[i];
+        auto lv = level[abs(lit)];
+        if (seen[lv])
+            continue;
+        seen[lv] = true;
+        trash.push_back(lv);
+        ++lbd;
+    }
+    c->score = lbd;
+    for (auto lv : trash)
+        seen[lv] = false;
+    trash.clear();
 }
 
 void analyze(clause * conflict) {
@@ -301,16 +317,11 @@ void analyze(clause * conflict) {
         return;
     }
     // learn new clause
-    double score;
-    if (num_lit < SBR_BOUND) {
-        score = num_lit;
-    } else {
-        score = SBR_BOUND + rand() * (1 / ((double) RAND_MAX + 1));
-    }
-    auto c = make_clause(learnt, CLAUSE_LEARNT, score);
+    auto c = make_clause(learnt, CLAUSE_LEARNT, 0);
+    update_score(c);
     push(-uip, c);
     learnt.clear();
-    if (num_lit == 2) {
+    if (num_lit == 2 || c->score <= 2) {
         db.push_front(c);
         ++db_num_persistent;
     } else {
@@ -343,6 +354,7 @@ optional<clause *> find_conflict() {
             }
             if (defined(abs(lit)))
                 return c; // conflict found
+            update_score(c);
             push(lit, c);
         next:;
         }
