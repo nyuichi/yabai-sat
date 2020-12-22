@@ -419,6 +419,34 @@ bool restart() {
     return false;
 }
 
+void simplify() {
+    if (decision_level > 0)
+        return;
+    uint new_size = 0;
+    for (uint i = 0; i < db.size(); ++i) {
+        auto c = db[i];
+        bool satisfied = false;
+        uint new_num_lit = 0;
+        for (uint i = 0; i < c->num_lit; ++i) {
+            int lit = c->lits[i];
+            uint v = abs(lit);
+            if (! defined(v)) {
+                c->lits[new_num_lit++] = lit;
+            } else if (ev(abs(lit)) == lit) {
+                unwatch_clause(c);
+                free(c);
+                satisfied = true;
+                break;
+            }
+        }
+        if (! satisfied) {
+            c->num_lit = new_num_lit;
+            db[new_size++] = c;
+        }
+    }
+    db.resize(new_size);
+}
+
 bool solve() {
     srand(0);
 
@@ -499,6 +527,7 @@ bool solve() {
             decay_activity();
             ++restart_timer;
         }
+        simplify();
         if (restart())
             continue;
         if (! decide())
