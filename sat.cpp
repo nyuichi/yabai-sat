@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <optional>
 #include <vector>
 extern "C" {
 #include <unistd.h>
@@ -25,11 +26,19 @@ enum {
 vector<uchar> model;
 vector<int> trail; // 0 for decision mark
 uint decision_level;
+enum {
+    CLAUSE_LEARNT = 1,
+};
 struct clause {
     uint num_lit;
+    int flags;
     int lits[]; // lits[0] and lits[1] are watched literals
 };
 vector<vector<clause *>> pos_list, neg_list; // watch lists
+vector<uint> level;
+vector<clause *> reason; // nullptr for decision
+vector<bool> seen; // only used in `analyze`
+vector<int> learnt; // only used in `analyze`
 
 bool defined(uint var) {
     return (model[var] & MODEL_DEFINED) != 0;
@@ -41,24 +50,30 @@ int ev(uint var) {
     return ! defined(var) ? 0 : phase(var) ? (int) var : -(int) var;
 }
 
-void push(int lit) {
+void push(int lit, clause * c) {
     uint var = abs(lit);
     model[var] = lit > 0 ? MODEL_DEFINED | MODEL_PHASE : MODEL_DEFINED;
+    level[var] = decision_level;
+    reason[var] = c;
     trail.push_back(lit);
 }
-int pop() {
+void pop() {
     int lit = trail.back();
     uint var = abs(lit);
     model[var] &= ~MODEL_DEFINED;
+    auto c = reason[var];
+    if (c && (c->flags & CLAUSE_LEARNT) != 0) {
+        free(c);
+    }
     trail.pop_back();
-    return lit;
 }
 
-clause * make_clause(const vector<int> & lits) {
+clause * make_clause(const vector<int> & lits, int flags) {
     clause * c = reinterpret_cast<clause *>(malloc(sizeof(clause) + sizeof(int) * lits.size()));
     c->num_lit = lits.size();
     for (uint i = 0; i < lits.size(); ++i)
         c->lits[i] = lits[i];
+    c->flags = flags;
     return c;
 }
 
@@ -83,16 +98,66 @@ void unwatch_clause(clause * c) {
     }
 }
 
-void backtrack() {
-    int lit = 0;
-    for (uint i = trail.size() - 1; trail[i] != 0; --i)
-        lit = pop();
-    trail.pop_back(); // remove the mark
-    --decision_level;
-    push(-lit); // flip the decision
+void backjump(uint level) {
+    while (decision_level != level) {
+        for (uint i = trail.size() - 1; trail[i] != 0; --i)
+            pop();
+        trail.pop_back(); // remove the mark
+        --decision_level;
+    }
 }
 
-bool find_conflict() {
+void analyze(clause * conflict) {
+    learnt.push_back(0); // reserve learnt[0] for decided literal
+    for (uint i = 0; i < conflict->num_lit; ++i) {
+        int lit = conflict->lits[i];
+        uint v = abs(lit);
+        seen[v] = true;
+        if (level[v] < decision_level) {
+            learnt.push_back(lit);
+        }
+    }
+    int decision;
+    for (uint i = trail.size() - 1; true; --i) {
+        int lit = trail[i];
+        uint v = abs(lit);
+        if (! seen[v])
+            continue;
+        seen[v] = false;
+        auto c = reason[v];
+        if (! c) {
+            decision = lit;
+            break;
+        }
+        for (uint i = 1; i < c->num_lit; ++i) {
+            int lit = c->lits[i];
+            uint v = abs(lit);
+            if (seen[v])
+                continue;
+            seen[v] = true;
+            if (level[v] < decision_level) {
+                learnt.push_back(lit);
+            }
+        }
+    }
+    learnt[0] = -decision;
+    uint num_lit = learnt.size();
+    for (uint i = 1; i < num_lit; ++i)
+        seen[abs(learnt[i])] = false;
+    uint max_lv = 0;
+    for (uint i = 1; i < num_lit; ++i)
+        max_lv = max(level[abs(learnt[i])], max_lv);
+    backjump(max_lv);
+    if (num_lit == 1) {
+        push(-decision, nullptr);
+        learnt.clear();
+        return;
+    }
+    push(-decision, make_clause(learnt, CLAUSE_LEARNT));
+    learnt.clear();
+}
+
+optional<clause *> find_conflict() {
     for (uint prop = trail.size() - 1; prop < trail.size(); ++prop) {
         int lit = trail[prop];
         auto & wlist = watch_list(-lit);
@@ -115,12 +180,12 @@ bool find_conflict() {
                 }
             }
             if (defined(abs(lit)))
-                return true; // conflict found
-            push(lit);
+                return c; // conflict found
+            push(lit, c);
         next:;
         }
     }
-    return false; // no conflict found
+    return nullopt; // no conflict found
 }
 
 int choose() {
@@ -137,7 +202,7 @@ int decide() {
         return false; // sat
     trail.push_back(0); // push mark
     ++decision_level;
-    push(lit);
+    push(lit, nullptr);
     return true;
 }
 
@@ -147,6 +212,10 @@ bool solve() {
     decision_level = 0;
     pos_list.resize(N + 1);
     neg_list.resize(N + 1);
+    level.resize(N + 1);
+    reason.resize(N + 1);
+    seen.resize(N + 1);
+    learnt.reserve(N);
 
     vector<int> unit;
     vector<int> new_lits;
@@ -171,7 +240,7 @@ bool solve() {
             if (last)
                 new_lits.push_back(lits[i]);
         }
-        watch_clause(make_clause(new_lits));
+        watch_clause(make_clause(new_lits, 0));
     next:
         new_lits.clear();
     }
@@ -179,7 +248,7 @@ bool solve() {
     while (! unit.empty()) {
         int lit = unit.back();
         unit.pop_back();
-        push(lit);
+        push(lit, nullptr);
         if (find_conflict())
             return false;
     }
@@ -189,10 +258,10 @@ bool solve() {
     }
 
     while (1) {
-        while (find_conflict()) {
+        while (auto conflict = find_conflict()) {
             if (decision_level == 0)
                 return false;
-            backtrack();
+            analyze(*conflict);
         }
         if (! decide())
             return true;
