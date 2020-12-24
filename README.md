@@ -1,0 +1,18 @@
+See also https://yabaitech.tokyo/techbookfest10/2020/12/20/techbookfest10.html.
+
+1. [backtrack](https://github.com/nyuichi/yabai-sat/blob/backtrack/sat.cpp)
+1. [bcp](https://github.com/nyuichi/yabai-sat/blob/bcp/sat.cpp)
+1. [2wl](https://github.com/nyuichi/yabai-sat/blob/2wl/sat.cpp)
+1. [ncb](https://github.com/nyuichi/yabai-sat/blob/ncb/sat.cpp)
+1. [cdcl (clause learning)](https://github.com/nyuichi/yabai-sat/blob/cdcl1/sat.cpp)
+1. [cdcl (clause deletion)](https://github.com/nyuichi/yabai-sat/blob/cdcl2/sat.cpp)
+1. [vsids](https://github.com/nyuichi/yabai-sat/blob/vsids/sat.cpp)
+1. [vsids (priority queue)](https://github.com/nyuichi/yabai-sat/blob/vsids-pq/sat.cpp)
+1. [evsids](https://github.com/nyuichi/yabai-sat/blob/evsids/sat.cpp)
+1. [phase-saving](https://github.com/nyuichi/yabai-sat/blob/phase-saving/sat.cpp)
+1. [luby-restart](https://github.com/nyuichi/yabai-sat/blob/luby-restart/sat.cpp)
+1. [trail-reuse](https://github.com/nyuichi/yabai-sat/blob/trail-reuse/sat.cpp)
+1. [ccmin](https://github.com/nyuichi/yabai-sat/blob/ccmin1/sat.cpp)
+1. [ccmin (full)](https://github.com/nyuichi/yabai-sat/blob/ccmin2/sat.cpp)
+1. [simp](https://github.com/nyuichi/yabai-sat/blob/simp/sat.cpp)
+1. [lbd](https://github.com/nyuichi/yabai-sat/blob/lbd/sat.cpp)
