@@ -61,10 +61,6 @@ void pop() {
     int lit = trail.back();
     uint var = abs(lit);
     model[var] &= ~MODEL_DEFINED;
-    auto c = reason[var];
-    if (c && (c->flags & CLAUSE_LEARNT) != 0) {
-        free(c);
-    }
     trail.pop_back();
 }
 
@@ -108,27 +104,31 @@ void backjump(uint level) {
 }
 
 void analyze(clause * conflict) {
-    learnt.push_back(0); // reserve learnt[0] for decided literal
+    learnt.push_back(0); // reserve learnt[0] for UIP
+    uint count = 0;
     for (uint i = 0; i < conflict->num_lit; ++i) {
         int lit = conflict->lits[i];
         uint v = abs(lit);
         seen[v] = true;
         if (level[v] < decision_level) {
             learnt.push_back(lit);
+        } else {
+            ++count;
         }
     }
-    int decision;
+    int uip;
     for (uint i = trail.size() - 1; true; --i) {
         int lit = trail[i];
         uint v = abs(lit);
         if (! seen[v])
             continue;
         seen[v] = false;
-        auto c = reason[v];
-        if (! c) {
-            decision = lit;
+        --count;
+        if (count == 0) {
+            uip = lit;
             break;
         }
+        auto c = reason[v];
         for (uint i = 1; i < c->num_lit; ++i) {
             int lit = c->lits[i];
             uint v = abs(lit);
@@ -137,24 +137,33 @@ void analyze(clause * conflict) {
             seen[v] = true;
             if (level[v] < decision_level) {
                 learnt.push_back(lit);
+            } else {
+                ++count;
             }
         }
     }
-    learnt[0] = -decision;
+    learnt[0] = -uip;
     uint num_lit = learnt.size();
     for (uint i = 1; i < num_lit; ++i)
         seen[abs(learnt[i])] = false;
     uint max_lv = 0;
-    for (uint i = 1; i < num_lit; ++i)
-        max_lv = max(level[abs(learnt[i])], max_lv);
+    for (uint i = 1; i < num_lit; ++i) {
+        uint lv = level[abs(learnt[i])];
+        if (lv > max_lv) {
+            max_lv = lv;
+            swap(learnt[1], learnt[i]);
+        }
+    }
     backjump(max_lv);
     if (num_lit == 1) {
-        push(-decision, nullptr);
+        push(-uip, nullptr);
         learnt.clear();
         return;
     }
-    push(-decision, make_clause(learnt, CLAUSE_LEARNT));
+    auto c = make_clause(learnt, CLAUSE_LEARNT);
+    push(-uip, c);
     learnt.clear();
+    watch_clause(c);
 }
 
 optional<clause *> find_conflict() {
